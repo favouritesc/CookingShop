@@ -39,7 +39,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(
     // 主机模式：非 null 时所有 DB 操作路由到 host DB，本地 DB 保持关闭
     @Volatile private var hostDb: SQLiteDatabase? = null
 
-    private val dataChangeSignal = MutableSharedFlow<Unit>(replay = 1, extraBufferCapacity = 0)
+    private val dataChangeSignal = MutableSharedFlow<Unit>(replay = 1, extraBufferCapacity = 1)
 
     init {
         emitDataChange()
@@ -48,6 +48,18 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(
     /** 供 SyncManager 在导入数据后手动触发 UI 刷新 */
     fun emitDataChange() {
         dataChangeSignal.tryEmit(Unit)
+        Log.d("CookingDB", "emitDataChange: subscribers=${dataChangeSignal.subscriptionCount.value}")
+    }
+
+    /**
+     * 切换到主机模式后，确保所有 Flow 订阅者收到最新数据。
+     * 因为 switchToHostMode 会创建新 DB，旧的 replay 值可能已过期。
+     */
+    fun emitDataChangeAfterModeSwitch() {
+        // 连续发射两次，确保即使上一个 replay 被消费也能收到新数据
+        dataChangeSignal.tryEmit(Unit)
+        dataChangeSignal.tryEmit(Unit)
+        Log.d("CookingDB", "emitDataChangeAfterModeSwitch: emitted 2 signals")
     }
 
     override fun getWritableDatabase(): SQLiteDatabase = hostDb ?: super.getWritableDatabase()
@@ -305,6 +317,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(
     suspend fun insertDish(dish: Dish): Long = withContext(Dispatchers.IO) {
         val db = writableDatabase
         val values = ContentValues().apply {
+            if (dish.id > 0) put("id", dish.id)
             put("name", dish.name)
             put("imageUrl", dish.imageUrl)
             put("recipe", dish.recipe)
@@ -422,6 +435,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(
     suspend fun insertIngredient(ingredient: Ingredient): Long = withContext(Dispatchers.IO) {
         val db = writableDatabase
         val values = ContentValues().apply {
+            if (ingredient.id > 0) put("id", ingredient.id)
             put("name", ingredient.name)
             put("categoryId", ingredient.categoryId)
             put("isDefault", if (ingredient.isDefault) 1 else 0)
@@ -644,6 +658,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(
     suspend fun insertOrder(order: Order): Long = withContext(Dispatchers.IO) {
         val db = writableDatabase
         val values = ContentValues().apply {
+            if (order.id > 0) put("id", order.id)
             put("date", order.date)
             put("time", order.time)
             put("status", order.status)

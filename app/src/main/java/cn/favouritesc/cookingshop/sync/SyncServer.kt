@@ -5,6 +5,8 @@ import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.io.FileInputStream
 import java.util.concurrent.CopyOnWriteArrayList
 
 private const val TAG = "SyncServer"
@@ -16,7 +18,8 @@ typealias WriteHandler = suspend (JSONObject) -> JSONObject
 class SyncServer(
     private val port: Int,
     private val snapshotProvider: SnapshotProvider? = null,
-    private val writeHandler: WriteHandler? = null
+    private val writeHandler: WriteHandler? = null,
+    private val filesDir: File? = null
 ) : NanoHTTPD(port) {
 
     // 变更日志（主机写，客户端拉）
@@ -80,6 +83,7 @@ class SyncServer(
                     }
                 }
             }
+            uri.startsWith("/image/") -> handleImage(uri.removePrefix("/image/"))
             else -> newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "not found")
         }
     }
@@ -99,6 +103,35 @@ class SyncServer(
             Log.e(TAG, "Write failed", e)
             newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", 
                 JSONObject().apply { put("error", e.message ?: "unknown") }.toString())
+        }
+    }
+
+    private fun handleImage(encodedPath: String): Response {
+        if (filesDir == null) {
+            return newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "no filesDir")
+        }
+        return try {
+            val decoded = java.net.URLDecoder.decode(encodedPath, "UTF-8")
+            val file = File(decoded)
+            // 安全检查：只允许从 filesDir 目录读取
+            if (!file.canonicalPath.startsWith(filesDir.canonicalPath)) {
+                Log.w(TAG, "Image access denied: $decoded")
+                return newFixedLengthResponse(Response.Status.FORBIDDEN, "text/plain", "forbidden")
+            }
+            if (!file.exists() || !file.isFile) {
+                Log.w(TAG, "Image not found: $decoded")
+                return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "not found")
+            }
+            val mime = when (file.extension.lowercase()) {
+                "jpg", "jpeg" -> "image/jpeg"
+                "png" -> "image/png"
+                "webp" -> "image/webp"
+                else -> "application/octet-stream"
+            }
+            newFixedLengthResponse(Response.Status.OK, mime, file.inputStream(), file.length())
+        } catch (e: Exception) {
+            Log.e(TAG, "Image serve failed", e)
+            newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "error")
         }
     }
 }

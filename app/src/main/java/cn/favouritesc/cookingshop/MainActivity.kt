@@ -104,6 +104,16 @@ fun MainScreen(appContainer: AppContainer) {
         }
     }
 
+    // 同步操作 Toast 提示（2s 消失）
+    LaunchedEffect(syncManager) {
+        syncManager?.toastMessage?.collect { message ->
+            snackbarHostState.showSnackbar(
+                message = message,
+                duration = androidx.compose.material3.SnackbarDuration.Short
+            )
+        }
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = {

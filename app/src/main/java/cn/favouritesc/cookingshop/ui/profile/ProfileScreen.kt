@@ -58,6 +58,10 @@ import cn.favouritesc.cookingshop.sync.ClientState
 import cn.favouritesc.cookingshop.sync.DiscoveredHost
 import cn.favouritesc.cookingshop.sync.SyncManager
 import cn.favouritesc.cookingshop.sync.SyncRole
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import cn.favouritesc.cookingshop.ui.components.CommonTopBar
 import cn.favouritesc.cookingshop.ui.theme.Primary
 
@@ -85,6 +89,20 @@ fun ProfileScreen(
     var showManualJoinDialog by remember { mutableStateOf(false) }
     var joinIpText by remember { mutableStateOf("") }
     val coroutineScope = rememberCoroutineScope()
+
+    val startDiscoveryAction = { syncManager?.nsdHelper?.startDiscovery() }
+    val nsdPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) startDiscoveryAction()
+    }
+    val requestNsdPermission = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            nsdPermissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+        } else {
+            startDiscoveryAction()
+        }
+    }
 
     Scaffold(
         topBar = { CommonTopBar(title = "我的") }
@@ -187,7 +205,7 @@ fun ProfileScreen(
                     onJoin = {
                         showRoleDialog = false
                         showDiscoveryDialog = true
-                        syncManager?.nsdHelper?.startDiscovery()
+                        requestNsdPermission()
                     },
                     onDismiss = { showRoleDialog = false }
                 )
@@ -198,7 +216,7 @@ fun ProfileScreen(
                 DiscoverHostsDialog(
                     hosts = discoveredHosts,
                     isDiscovering = isDiscovering,
-                    onScan = { syncManager?.nsdHelper?.startDiscovery() },
+                    onScan = { requestNsdPermission() },
                     onConnect = { host ->
                         coroutineScope.launch { syncManager?.joinHost(host.ip, host.port) }
                         showDiscoveryDialog = false

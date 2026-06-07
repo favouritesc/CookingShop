@@ -1,0 +1,147 @@
+<resources>
+    <string name="app_name">烹饪助手</string>
+    
+    <!-- 通用 -->
+    <string name="confirm">确认</string>
+    <string name="cancel">取消</string>
+    <string name="save">保存</string>
+    <string name="delete">删除</string>
+    <string name="edit">编辑</string>
+    <string name="add">添加</string>
+    <string name="search">搜索</string>
+    <string name="loading">加载中...</string>
+    <string name="error_unknown">发生未知错误</string>
+    
+    <!-- 导航 -->
+    <string name="nav_home">首页</string>
+    <string name="nav_dish_library">菜品库</string>
+    <string name="nav_order">点餐</string>
+    <string name="nav_profile">我的</string>
+    
+    <!-- 首页 -->
+    <string name="home_title">首页</string>
+    <string name="home_today">今天</string>
+    <string name="home_today_orders">今日订单</string>
+    <string name="home_no_orders">今天还没有点餐</string>
+    <string name="home_ingredient_summary">今日备菜汇总</string>
+    <string name="home_create_order">创建点餐</string>
+    <string name="home_dishes_count">%d 道菜</string>
+    
+    <!-- 菜品 -->
+    <string name="dish_library_title">菜品库</string>
+    <string name="dish_add">添加菜品</string>
+    <string name="dish_edit">编辑菜品</string>
+    <string name="dish_detail">菜品详情</string>
+    <string name="dish_name">菜品名称</string>
+    <string name="dish_recipe">做法</string>
+    <string name="dish_no_recipe">尚未发布做法</string>
+    <string name="dish_ingredients">备菜清单</string>
+    <string name="dish_tags">标签</string>
+    <string name="dish_image">菜品图片</string>
+    <string name="dish_select_image">选择图片</string>
+    <string name="dish_save_success">菜品保存成功</string>
+    <string name="dish_delete_confirm">确定要删除 %s 吗？</string>
+    <string name="dish_no_dishes">暂无菜品</string>
+    <string name="dish_search_hint">搜索菜品</string>
+    
+    <!-- 标签 -->
+    <string name="tag_meal_time">餐时</string>
+    <string name="tag_type">类型</string>
+    <string name="tag_cooking_time">烹饪时间</string>
+    <string name="tag_difficulty">难度</string>
+    <string name="tag_cuisine">菜系</string>
+    
+    <!-- 备菜 -->
+    <string name="ingredient_title">备菜管理</string>
+    <string name="ingredient_add">添加备菜</string>
+    <string name="ingredient_edit">编辑备菜</string>
+    <string name="ingredient_name">备菜名称</string>
+    <string name="ingredient_category">分类</string>
+    <string name="ingredient_no_ingredients">暂无备菜</string>
+    <string name="ingredient_delete_confirm">确定要删除 %s 吗？</string>
+    <string name="ingredient_summary_title">备菜汇总</string>
+    <string name="ingredient_summary_no_data">暂无备菜需求</string>
+    <string name="ingredient_summary_source">来源: %s</string>
+    
+    <!-- 订单 -->
+    <string name="order_create_title">创建点餐</string>
+    <string name="order_edit_title">编辑点餐</string>
+    <string name="order_detail_title">点餐详情</string>
+    <string name="order_history_title">点餐历史</string>
+    <string name="order_date">日期</string>
+    <string name="order_time">时间</string>
+    <string name="order_status">状态</string>
+    <string name="order_select_date">选择日期</string>
+    <string name="order_select_time">选择时间</string>
+    <string name="order_selected_dishes">已选菜品</string>
+    <string name="order_no_dishes">暂未选择菜品</string>
+    <string name="order_add_dish">添加菜品</string>
+    <string name="order_publish">发布点餐</string>
+    <string name="order_save_changes">保存修改</string>
+    <string name="order_delete">删除订单</string>
+    <string name="order_delete_confirm">确定要删除这个订单吗？此操作不可撤销。</string>
+    <string name="order_no_history">暂无点餐记录</string>
+    <string name="order_select_dishes">选择菜品</string>
+    <string name="order_dishes_count">%d 道菜</string>
+    
+    <!-- 日期范围 -->
+    <string name="date_range_one_day">最近1天</string>
+    <string name="date_range_seven_days">最近7天</string>
+    <string name="date_range_thirty_days">最近30天</string>
+    <string name="date_range_custom">自定义</string>
+    <string name="date_range_start">开始日期</string>
+    <string name="date_range_end">结束日期</string>
+    
+    <!-- 个人中心 -->
+    <string name="profile_title">我的</string>
+    <string name="profile_cooking_assistant">烹饪助手</string>
+    <string name="profile_dish_management">菜品管理</string>
+    <string name="profile_dish_management_subtitle">管理您的菜品库</string>
+    <string name="profile_ingredient_management">备菜管理</string>
+    <string name="profile_ingredient_management_subtitle">管理备菜分类和清单</string>
+    <string name="profile_order_history">订单历史</string>
+    <string name="profile_order_history_subtitle">查看历史点餐记录</string>
+    <string name="profile_ingredient_summary">备菜汇总</string>
+    <string name="profile_ingredient_summary_subtitle">查看备菜需求汇总</string>
+    <string name="profile_about">关于</string>
+    <string name="profile_version">版本 1.0.0</string>
+    
+    <!-- 备菜分类 -->
+    <string name="category_vegetable">蔬菜类</string>
+    <string name="category_meat">肉类</string>
+    <string name="category_tofu">豆制品</string>
+    <string name="category_staple">主食类</string>
+    <string name="category_fruit">水果类</string>
+    
+    <!-- 烹饪时间 -->
+    <string name="cooking_time_10min">10分钟内</string>
+    <string name="cooking_time_30min">30分钟内</string>
+    <string name="cooking_time_1hour">1小时以上</string>
+    
+    <!-- 难度 -->
+    <string name="difficulty_easy">简单</string>
+    <string name="difficulty_medium">中等</string>
+    <string name="difficulty_hard">复杂</string>
+    
+    <!-- 餐时 -->
+    <string name="meal_time_breakfast">早餐</string>
+    <string name="meal_time_lunch">午餐</string>
+    <string name="meal_time_dinner">晚餐</string>
+    
+    <!-- 类型 -->
+    <string name="type_dessert">甜品</string>
+    <string name="type_snack">小吃</string>
+    <string name="type_drink">饮品</string>
+    <string name="type_main">主食</string>
+    <string name="type_soup">汤品</string>
+    
+    <!-- 菜系 -->
+    <string name="cuisine_sichuan">川菜</string>
+    <string name="cuisine_hunan">湘菜</string>
+    <string name="cuisine_cantonese">粤菜</string>
+    <string name="cuisine_shandong">鲁菜</string>
+    <string name="cuisine_jiangsu">苏菜</string>
+    <string name="cuisine_zhejiang">浙菜</string>
+    <string name="cuisine_fujian">闽菜</string>
+    <string name="cuisine_anhui">徽菜</string>
+</resources>

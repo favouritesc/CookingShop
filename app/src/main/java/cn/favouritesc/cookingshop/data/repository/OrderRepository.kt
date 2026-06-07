@@ -104,6 +104,7 @@ class OrderRepository(private val databaseHelper: DatabaseHelper) {
         dishes.forEach { dish ->
             insertOrderDish(dish.copy(orderId = order.id))
         }
+        sync?.invoke(order.id)
     }
 
     suspend fun deleteOrderWithDishes(order: Order) {

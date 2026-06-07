@@ -29,6 +29,7 @@ class IngredientRepository(private val databaseHelper: DatabaseHelper) {
 
     suspend fun updateIngredient(ingredient: Ingredient) {
         databaseHelper.updateIngredient(ingredient)
+        sync?.invoke(ingredient.id)
     }
 
     suspend fun deleteIngredient(ingredient: Ingredient) {

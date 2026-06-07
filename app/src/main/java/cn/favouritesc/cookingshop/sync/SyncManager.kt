@@ -42,6 +42,7 @@ class SyncManager(
     context: Context
 ) {
     val nsdHelper = NsdHelper(context)
+    private val filesDir = context.filesDir
 
     private var server: SyncServer? = null
     private var client: SyncClient? = null
@@ -50,6 +51,9 @@ class SyncManager(
 
     // 串行广播队列：保证主机端消息按 FIFO 顺序写入 changelog
     private val writeChannel = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+
+    // 处理来自远端的同步事件时，抑制本地 sync 回调，避免循环同步
+    @Volatile private var suppressSyncCallback = false
 
     init {
         scope.launch {
@@ -73,6 +77,10 @@ class SyncManager(
     /** 每次同步事件处理完成后递增，供 UI 层触发一次性查询刷新 */
     val dataVersion: StateFlow<Long> = _dataVersion
 
+    private val _toastMessage = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 8)
+    /** 同步操作的 Toast 消息（UI 层收集后显示 2s 消失） */
+    val toastMessage: SharedFlow<String> = _toastMessage
+
     // === 主机模式 ===
 
     fun startHost(port: Int = 8765) {
@@ -81,7 +89,8 @@ class SyncManager(
         server = SyncServer(
             port,
             snapshotProvider = { buildFullSnapshot() },
-            writeHandler = { json -> handleWrite(json) }
+            writeHandler = { json -> handleWrite(json) },
+            filesDir = filesDir
         ).apply {
             startServer()
         }
@@ -202,62 +211,201 @@ class SyncManager(
         }
     }
 
-    // === Repository 回调入口（主机端广播 / 客户端空操作） ===
+    // === Repository 回调入口（主机端广播 / 客户端转发） ===
 
     /** 菜品保存后广播完整实体（串行队列保证 FIFO） */
     fun onDishSaved(dishId: Long) {
-        if (_status.value.role != SyncRole.HOST) return
-        writeChannel.trySend {
-            val dish = dishRepository.getDishByIdOnce(dishId) ?: return@trySend
-            val ingredients = dishRepository.getDishIngredientsByDishIdOnce(dishId)
-            val tags = dishRepository.getDishTagCrossRefsByDishIdOnce(dishId)
-            val payload = dishToJson(dish).apply {
-                put("ingredients", JSONArray().apply { ingredients.forEach { put(dishIngredientToJson(it)) } })
-                put("tags", JSONArray().apply { tags.forEach { put(crossRefToJson(it)) } })
+        if (suppressSyncCallback) return
+        when (_status.value.role) {
+            SyncRole.HOST -> {
+                writeChannel.trySend {
+                    val dish = dishRepository.getDishByIdOnce(dishId) ?: return@trySend
+                    val ingredients = dishRepository.getDishIngredientsByDishIdOnce(dishId)
+                    val tags = dishRepository.getDishTagCrossRefsByDishIdOnce(dishId)
+                    val imageBaseUrl = "http://${_hostIp.value}:${_hostPort.value}/image/"
+                    val payload = dishToJson(dish).apply {
+                        val img = optString("imageUrl", "")
+                        if (img.startsWith("/")) {
+                            put("imageUrl", imageBaseUrl + java.net.URLEncoder.encode(img, "UTF-8"))
+                        }
+                        put("ingredients", JSONArray().apply { ingredients.forEach { put(dishIngredientToJson(it)) } })
+                        put("tags", JSONArray().apply { tags.forEach { put(crossRefToJson(it)) } })
+                    }
+                    server?.append(SyncMessage(MsgType.DISH_SAVED, payload))
+                    _toastMessage.tryEmit("已同步菜品: ${dish.name}")
+                }
             }
-            server?.append(SyncMessage(MsgType.DISH_SAVED, payload))
+            SyncRole.CLIENT -> scope.launch {
+                try {
+                    val dish = dishRepository.getDishByIdOnce(dishId) ?: return@launch
+                    val ingredients = dishRepository.getDishIngredientsByDishIdOnce(dishId)
+                    val tags = dishRepository.getDishTagCrossRefsByDishIdOnce(dishId)
+                    val payload = dishToJson(dish).apply {
+                        put("ingredients", JSONArray().apply { ingredients.forEach { put(dishIngredientToJson(it)) } })
+                        put("tags", JSONArray().apply { tags.forEach { put(crossRefToJson(it)) } })
+                    }
+                    val body = JSONObject().apply {
+                        put("action", "create_dish")
+                        put("data", payload)
+                    }
+                    client?.postWrite(_hostIp.value, _hostPort.value, body)
+                    _toastMessage.tryEmit("已同步菜品到主机: ${dish.name}")
+                    Log.d(TAG, "Client forwarded dish save: $dishId")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Client forward dish save failed", e)
+                    _toastMessage.tryEmit("菜品同步失败")
+                }
+            }
+            else -> {}
         }
     }
 
     /** 菜品删除后广播 */
     fun onDishDeleted(dishId: Long) {
-        if (_status.value.role != SyncRole.HOST) return
-        server?.append(SyncMessage(MsgType.DISH_DELETED, JSONObject().apply { put("id", dishId) }))
+        if (suppressSyncCallback) return
+        when (_status.value.role) {
+            SyncRole.HOST -> {
+                server?.append(SyncMessage(MsgType.DISH_DELETED, JSONObject().apply { put("id", dishId) }))
+                _toastMessage.tryEmit("已同步删除菜品")
+            }
+            SyncRole.CLIENT -> scope.launch {
+                try {
+                    val body = JSONObject().apply {
+                        put("action", "delete_dish")
+                        put("data", JSONObject().apply { put("id", dishId) })
+                    }
+                    client?.postWrite(_hostIp.value, _hostPort.value, body)
+                    _toastMessage.tryEmit("已同步删除菜品到主机")
+                    Log.d(TAG, "Client forwarded dish delete: $dishId")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Client forward dish delete failed", e)
+                    _toastMessage.tryEmit("菜品删除同步失败")
+                }
+            }
+            else -> {}
+        }
     }
 
     /** 订单保存后广播完整实体（串行队列保证 FIFO） */
     fun onOrderSaved(orderId: Long) {
-        if (_status.value.role != SyncRole.HOST) return
-        writeChannel.trySend {
-            val order = orderRepository.getOrderByIdOnce(orderId) ?: return@trySend
-            val dishes = orderRepository.getOrderDishesByOrderIdOnce(orderId)
-            val payload = orderToJson(order).apply {
-                put("dishes", JSONArray().apply { dishes.forEach { put(orderDishToJson(it)) } })
+        if (suppressSyncCallback) return
+        when (_status.value.role) {
+            SyncRole.HOST -> {
+                writeChannel.trySend {
+                    val order = orderRepository.getOrderByIdOnce(orderId) ?: return@trySend
+                    val dishes = orderRepository.getOrderDishesByOrderIdOnce(orderId)
+                    val payload = orderToJson(order).apply {
+                        put("dishes", JSONArray().apply { dishes.forEach { put(orderDishToJson(it)) } })
+                    }
+                    server?.append(SyncMessage(MsgType.ORDER_SAVED, payload))
+                    _toastMessage.tryEmit("已同步订单 #${orderId}")
+                }
             }
-            server?.append(SyncMessage(MsgType.ORDER_SAVED, payload))
+            SyncRole.CLIENT -> scope.launch {
+                try {
+                    val order = orderRepository.getOrderByIdOnce(orderId) ?: return@launch
+                    val dishes = orderRepository.getOrderDishesByOrderIdOnce(orderId)
+                    val payload = orderToJson(order).apply {
+                        put("dishes", JSONArray().apply { dishes.forEach { put(orderDishToJson(it)) } })
+                    }
+                    val body = JSONObject().apply {
+                        put("action", "create_order")
+                        put("data", payload)
+                    }
+                    client?.postWrite(_hostIp.value, _hostPort.value, body)
+                    _toastMessage.tryEmit("已同步订单到主机 #${orderId}")
+                    Log.d(TAG, "Client forwarded order save: $orderId")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Client forward order save failed", e)
+                    _toastMessage.tryEmit("订单同步失败")
+                }
+            }
+            else -> {}
         }
     }
 
     /** 订单删除后广播 */
     fun onOrderDeleted(orderId: Long) {
-        if (_status.value.role != SyncRole.HOST) return
-        server?.append(SyncMessage(MsgType.ORDER_DELETED, JSONObject().apply { put("id", orderId) }))
+        if (suppressSyncCallback) return
+        when (_status.value.role) {
+            SyncRole.HOST -> {
+                server?.append(SyncMessage(MsgType.ORDER_DELETED, JSONObject().apply { put("id", orderId) }))
+                _toastMessage.tryEmit("已同步删除订单 #${orderId}")
+            }
+            SyncRole.CLIENT -> scope.launch {
+                try {
+                    val body = JSONObject().apply {
+                        put("action", "delete_order")
+                        put("data", JSONObject().apply { put("id", orderId) })
+                    }
+                    client?.postWrite(_hostIp.value, _hostPort.value, body)
+                    _toastMessage.tryEmit("已同步删除订单到主机 #${orderId}")
+                    Log.d(TAG, "Client forwarded order delete: $orderId")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Client forward order delete failed", e)
+                    _toastMessage.tryEmit("订单删除同步失败")
+                }
+            }
+            else -> {}
+        }
     }
 
     /** 食材保存后广播完整实体（串行队列保证 FIFO） */
     fun onIngredientSaved(ingredientId: Long) {
-        if (_status.value.role != SyncRole.HOST) return
-        writeChannel.trySend {
-            val list = ingredientRepository.getAllIngredientsOnce()
-            val ingredient = list.find { it.id == ingredientId } ?: return@trySend
-            server?.append(SyncMessage(MsgType.INGREDIENT_SAVED, ingredientToJson(ingredient)))
+        if (suppressSyncCallback) return
+        when (_status.value.role) {
+            SyncRole.HOST -> {
+                writeChannel.trySend {
+                    val list = ingredientRepository.getAllIngredientsOnce()
+                    val ingredient = list.find { it.id == ingredientId } ?: return@trySend
+                    server?.append(SyncMessage(MsgType.INGREDIENT_SAVED, ingredientToJson(ingredient)))
+                    _toastMessage.tryEmit("已同步食材: ${ingredient.name}")
+                }
+            }
+            SyncRole.CLIENT -> scope.launch {
+                try {
+                    val list = ingredientRepository.getAllIngredientsOnce()
+                    val ingredient = list.find { it.id == ingredientId } ?: return@launch
+                    val body = JSONObject().apply {
+                        put("action", "create_ingredient")
+                        put("data", ingredientToJson(ingredient))
+                    }
+                    client?.postWrite(_hostIp.value, _hostPort.value, body)
+                    _toastMessage.tryEmit("已同步食材到主机: ${ingredient.name}")
+                    Log.d(TAG, "Client forwarded ingredient save: $ingredientId")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Client forward ingredient save failed", e)
+                    _toastMessage.tryEmit("食材同步失败")
+                }
+            }
+            else -> {}
         }
     }
 
     /** 食材删除后广播 */
     fun onIngredientDeleted(ingredientId: Long) {
-        if (_status.value.role != SyncRole.HOST) return
-        server?.append(SyncMessage(MsgType.INGREDIENT_DELETED, JSONObject().apply { put("id", ingredientId) }))
+        if (suppressSyncCallback) return
+        when (_status.value.role) {
+            SyncRole.HOST -> {
+                server?.append(SyncMessage(MsgType.INGREDIENT_DELETED, JSONObject().apply { put("id", ingredientId) }))
+                _toastMessage.tryEmit("已同步删除食材")
+            }
+            SyncRole.CLIENT -> scope.launch {
+                try {
+                    val body = JSONObject().apply {
+                        put("action", "delete_ingredient")
+                        put("data", JSONObject().apply { put("id", ingredientId) })
+                    }
+                    client?.postWrite(_hostIp.value, _hostPort.value, body)
+                    _toastMessage.tryEmit("已同步删除食材到主机")
+                    Log.d(TAG, "Client forwarded ingredient delete: $ingredientId")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Client forward ingredient delete failed", e)
+                    _toastMessage.tryEmit("食材删除同步失败")
+                }
+            }
+            else -> {}
+        }
     }
 
     // === 全量快照（供 SyncServer /full 端点调用） ===
@@ -277,9 +425,20 @@ class SyncManager(
         }
         val ingredients = ingredientRepository.getAllIngredientsOnce()
         val categories = ingredientRepository.getAllIngredientCategoriesOnce()
+        val imageBaseUrl = "http://${_hostIp.value}:${_hostPort.value}/image/"
 
         JSONObject().apply {
-            put("dishes", JSONArray().apply { dishes.forEach { put(dishToJson(it)) } })
+            put("dishes", JSONArray().apply {
+                dishes.forEach { d ->
+                    put(dishToJson(d).apply {
+                        // 将本地文件路径转换为 HTTP URL
+                        val img = optString("imageUrl", "")
+                        if (img.startsWith("/")) {
+                            put("imageUrl", imageBaseUrl + java.net.URLEncoder.encode(img, "UTF-8"))
+                        }
+                    })
+                }
+            })
             put("dishIngredients", JSONArray().apply { dishIngredients.forEach { put(dishIngredientToJson(it)) } })
             put("dishTagCrossRefs", JSONArray().apply { dishTagCrossRefs.forEach { put(crossRefToJson(it)) } })
             put("orders", JSONArray().apply { orders.forEach { put(orderToJson(it)) } })
@@ -294,6 +453,7 @@ class SyncManager(
     private suspend fun handleWrite(body: JSONObject): JSONObject {
         val action = body.getString("action")
         val data = body.getJSONObject("data")
+        Log.d(TAG, "handleWrite: action=$action, dataKeys=${data.keys().asSequence().toList()}")
         val result: JSONObject = when (action) {
             "create_dish" -> {
                 val dish = jsonToDish(data)
@@ -303,8 +463,15 @@ class SyncManager(
                 val tags = data.optJSONArray("tags")?.let { arr ->
                     (0 until arr.length()).map { jsonToCrossRef(arr.getJSONObject(it)) }
                 } ?: emptyList()
-                val id = dishRepository.saveDishWithIngredientsAndTags(dish, ingredients, tags)
-                JSONObject().apply { put("id", id); put("status", "ok") }
+                // Upsert: 存在则更新，不存在则插入
+                val existing = if (dish.id > 0) dishRepository.getDishByIdOnce(dish.id) else null
+                if (existing != null) {
+                    dishRepository.updateDishWithIngredientsAndTags(dish, ingredients, tags)
+                    JSONObject().apply { put("id", dish.id); put("status", "updated") }
+                } else {
+                    val id = dishRepository.saveDishWithIngredientsAndTags(dish, ingredients, tags)
+                    JSONObject().apply { put("id", id); put("status", "created") }
+                }
             }
             "update_dish" -> {
                 val dish = jsonToDish(data)
@@ -330,8 +497,15 @@ class SyncManager(
                 val dishes = data.optJSONArray("dishes")?.let { arr ->
                     (0 until arr.length()).map { jsonToOrderDish(arr.getJSONObject(it)) }
                 } ?: emptyList()
-                val id = orderRepository.saveOrderWithDishes(order, dishes)
-                JSONObject().apply { put("id", id); put("status", "ok") }
+                // Upsert
+                val existing = if (order.id > 0) orderRepository.getOrderByIdOnce(order.id) else null
+                if (existing != null) {
+                    orderRepository.updateOrderWithDishes(order, dishes)
+                    JSONObject().apply { put("id", order.id); put("status", "updated") }
+                } else {
+                    val id = orderRepository.saveOrderWithDishes(order, dishes)
+                    JSONObject().apply { put("id", id); put("status", "created") }
+                }
             }
             "update_order" -> {
                 val order = jsonToOrder(data)
@@ -351,8 +525,15 @@ class SyncManager(
             }
             "create_ingredient" -> {
                 val ingredient = jsonToIngredient(data)
-                val id = ingredientRepository.insertIngredient(ingredient)
-                JSONObject().apply { put("id", id); put("status", "ok") }
+                // Upsert
+                val existing = if (ingredient.id > 0) ingredientRepository.getAllIngredientsOnce().find { it.id == ingredient.id } else null
+                if (existing != null) {
+                    ingredientRepository.updateIngredient(ingredient)
+                    JSONObject().apply { put("id", ingredient.id); put("status", "updated") }
+                } else {
+                    val id = ingredientRepository.insertIngredient(ingredient)
+                    JSONObject().apply { put("id", id); put("status", "created") }
+                }
             }
             "delete_ingredient" -> {
                 val list = ingredientRepository.getAllIngredientsOnce()
@@ -365,12 +546,17 @@ class SyncManager(
             }
             else -> JSONObject().apply { put("error", "unknown action: $action") }
         }
+        // 主机端收到客户端写操作后，刷新自身 UI
+        databaseHelper.emitDataChange()
+        _dataVersion.value++
+        Log.d(TAG, "handleWrite: result=${result.toString().take(100)}")
         return result
     }
 
     // === 全量快照批量导入（客户端首次连接 /full） ===
 
     private suspend fun importFullSnapshot(json: JSONObject) = withContext(Dispatchers.IO) {
+        suppressSyncCallback = true
         val db = databaseHelper.writableDatabase
         db.beginTransaction()
         try {
@@ -400,6 +586,19 @@ class SyncManager(
                     Log.e(TAG, "importFullSnapshot: order[$i] failed — ${e.message}", e)
                 }
             }
+            // 订单-菜品关联
+            val odArr = json.optJSONArray("orderDishes") ?: JSONArray()
+            var odOk = 0; var odFail = 0
+            for (i in 0 until odArr.length()) {
+                try {
+                    val od = jsonToOrderDish(odArr.getJSONObject(i))
+                    databaseHelper.insertOrderDish(od)
+                    odOk++
+                } catch (e: Exception) {
+                    odFail++
+                    Log.e(TAG, "importFullSnapshot: orderDish[$i] failed — ${e.message}", e)
+                }
+            }
             // 食材
             val ingredientsArr = json.optJSONArray("ingredients") ?: JSONArray()
             var ingOk = 0; var ingFail = 0
@@ -413,10 +612,39 @@ class SyncManager(
                     Log.e(TAG, "importFullSnapshot: ingredient[$i] failed — ${e.message}", e)
                 }
             }
+            // 菜品-食材关联
+            val diArr = json.optJSONArray("dishIngredients") ?: JSONArray()
+            var diOk = 0; var diFail = 0
+            for (i in 0 until diArr.length()) {
+                try {
+                    val di = jsonToDishIngredient(diArr.getJSONObject(i))
+                    databaseHelper.insertDishIngredient(di)
+                    diOk++
+                } catch (e: Exception) {
+                    diFail++
+                    Log.e(TAG, "importFullSnapshot: dishIngredient[$i] failed — ${e.message}", e)
+                }
+            }
+            // 菜品-标签关联
+            val crArr = json.optJSONArray("dishTagCrossRefs") ?: JSONArray()
+            var crOk = 0; var crFail = 0
+            for (i in 0 until crArr.length()) {
+                try {
+                    val cr = jsonToCrossRef(crArr.getJSONObject(i))
+                    databaseHelper.insertDishTagCrossRef(cr)
+                    crOk++
+                } catch (e: Exception) {
+                    crFail++
+                    Log.e(TAG, "importFullSnapshot: dishTagCrossRef[$i] failed — ${e.message}", e)
+                }
+            }
             db.setTransactionSuccessful()
-            Log.d(TAG, "Full snapshot imported: dishes ${dishOk}ok/${dishFail}fail, orders ${orderOk}ok/${orderFail}fail, ingredients ${ingOk}ok/${ingFail}fail")
+            Log.d(TAG, "Full snapshot imported: dishes ${dishOk}/${dishFail}fail, orders ${orderOk}/${orderFail}fail, orderDishes ${odOk}/${odFail}fail, ingredients ${ingOk}/${ingFail}fail, dishIngredients ${diOk}/${diFail}fail, tagCrossRefs ${crOk}/${crFail}fail")
         } finally {
             db.endTransaction()
+            suppressSyncCallback = false
+            // 确保所有 Flow 订阅者收到最新数据
+            databaseHelper.emitDataChangeAfterModeSwitch()
         }
     }
 
@@ -424,6 +652,7 @@ class SyncManager(
 
     private suspend fun handleSyncEvent(msg: SyncMessage) {
         val payload = msg.payload ?: return
+        suppressSyncCallback = true
         try {
             when (msg.type) {
                 MsgType.DISH_SAVED -> importDish(payload)
@@ -437,7 +666,8 @@ class SyncManager(
             _dataVersion.value++
         } catch (e: Exception) {
             Log.e(TAG, "handleSyncEvent: failed to process ${msg.type}, payload=${payload.keys().asSequence().toList()}", e)
-            // 单条消息处理失败不应影响后续同步
+        } finally {
+            suppressSyncCallback = false
         }
     }
 
